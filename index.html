@@ -71,6 +71,27 @@
     
 }
 
+
+/* Tooltip for route numbers */
+.route-tooltip {
+    background: rgba(255, 255, 255, 0.9);
+    color: #111;
+    font-weight: bold;
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    border: 1px solid #ddd;
+    pointer-events: none; /* avoids blocking mouse */
+}
+
+.route-tooltip.leaflet-tooltip-bottom::after,
+.route-tooltip.leaflet-tooltip-top::after {
+    border-top-color: rgba(255, 255, 255, 0.9); /* matches tooltip bg */
+}
+
+
+
     </style>
 </head>
 <body>
@@ -81,7 +102,8 @@
 
 <div id="sidebar" class="sidebar">
     <div class="sidebar-header">
-        
+        <b>${routeLabel}</b>${recommended}
+
         <button id="closeSidebar" class="close-btn">✕</button>
     </div>
 
@@ -494,8 +516,10 @@ async function processRoutes(osrmRoutes) {
     });
 
     // pick recommended: smallest combined risk
-    routesInfo.sort((a,b) => a.risk.combined - b.risk.combined);
-    const recommendedIndex = routesInfo[0].index;
+    // find recommended route by lowest risk, but keep original order
+const recommendedRoute = routesInfo.reduce((min, r) => r.risk.combined < min.risk.combined ? r : min, routesInfo[0]);
+const recommendedIndex = recommendedRoute.index;
+
 
     renderRoutes(routesInfo, recommendedIndex);
     updateSidebarRoutes(routesInfo, recommendedIndex);
@@ -599,42 +623,42 @@ function showTurnByTurn(routeInfo) {
 function updateSidebarRoutes(routesInfo, recommendedIndex) {
     let html = `<h3>Route options</h3><div class="routes-list">`;
 
-    routesInfo.forEach(info => {
-        const r = info.risk;
-        let riskLabel = (r.combined < 0.4) ? "Low" :
-                        (r.combined < 0.7) ? "Medium" : "High";
-        let color = (riskLabel === "Low") ? "green" :
-                    (riskLabel === "Medium") ? "orange" : "red";
+    routesInfo.forEach((info, i) => {
+    const routeLabel = `Route ${i + 1}`; // now i is defined
+    const r = info.risk;
+    let riskLabel = (r.combined < 0.4) ? "Low" :
+                    (r.combined < 0.7) ? "Medium" : "High";
+    let color = (riskLabel === "Low") ? "green" :
+                (riskLabel === "Medium") ? "orange" : "red";
 
-        const recommended = (info.index === recommendedIndex)
-            ? " <strong>⭐ Recommended</strong>"
-            : "";
+    const recommended = (info.index === recommendedIndex)
+        ? " <strong>⭐ Recommended</strong>"
+        : "";
 
-        html += `
-            <div class="route-item" data-idx="${info.index}" 
-                 style="margin-bottom:8px; padding:8px; border-radius:6px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.06);">
-
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <b>Route ${info.index + 1}</b>${recommended}
-                        <div style="font-size:12px; color:#666;">
-                            ${info.durationMin} min • ${info.distanceKm} km
-                        </div>
-                    </div>
-
-                    <div style="text-align:right;">
-                        <div style="color:${color}; font-weight:600;">
-                            ${r.combined.toFixed(2)} (${riskLabel})
-                        </div>
-                        <button class="show-turns-btn" data-idx="${info.index}"
-                                style="margin-top:6px; padding:4px 8px; cursor:pointer;">
-                            Show turns
-                        </button>
+    html += `
+        <div class="route-item" data-idx="${info.index}" 
+             style="margin-bottom:8px; padding:8px; border-radius:6px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <b>${routeLabel}</b>${recommended}
+                    <div style="font-size:12px; color:#666;">
+                        ${info.durationMin} min • ${info.distanceKm} km
                     </div>
                 </div>
+                <div style="text-align:right;">
+                    <div style="color:${color}; font-weight:600;">
+                        ${r.combined.toFixed(2)} (${riskLabel})
+                    </div>
+                    <button class="show-turns-btn" data-idx="${info.index}"
+                            style="margin-top:6px; padding:4px 8px; cursor:pointer;">
+                        Show turns
+                    </button>
+                </div>
             </div>
-        `;
-    });
+        </div>
+    `;
+});
+
 
     html += `</div><hr>`;
     document.getElementById("risk-details").innerHTML = html;
@@ -665,53 +689,77 @@ function updateSidebarRoutes(routesInfo, recommendedIndex) {
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------   
 
 
+
+
 function renderRoutes(routesInfo, recommendedIndex) {
-    // Remove old routes
-    routeLayers.forEach(l => map.removeLayer(l));
+    // Clear old routes
+    routeLayers.forEach(obj => map.removeLayer(obj.line));
     routeLayers = [];
 
     routesInfo.forEach((info, i) => {
-        // Draw route segments with color
-        const polylines = drawSegmentedRoute(info.coords);
+        // Convert coords
+        const latlngs = info.coords.map(c => ({ lat: c[1], lng: c[0] }));
+        const segments = splitRoute(latlngs);
 
-        // Store layers
-        routeLayers.push(...polylines); // drawSegmentedRoute will return array of L.Polyline
+        const lines = [];
 
-        // Attach click to each segment
-        polylines.forEach(line => {
+        segments.forEach(seg => {
+            const mid = {
+                lat: (seg[0].lat + seg[1].lat) / 2,
+                lng: (seg[0].lng + seg[1].lng) / 2
+            };
+            const risk = getRiskAtPoint(mid.lat, mid.lng);
+
+            const line = L.polyline(
+                [
+                    [seg[0].lat, seg[0].lng],
+                    [seg[1].lat, seg[1].lng]
+                ],
+                {
+                    color: getColor(risk),
+
+                    weight: 6,
+                    opacity: 0.8
+                }
+            ).addTo(map);
+
+            // Bind tooltip showing route number
+            line.bindTooltip(`Route ${i + 1}`, {
+                permanent: false,
+                direction: "top",
+                className: "route-tooltip",
+                offset: [0, -10]
+            });
+
             line.on("click", () => showTurnByTurn(info));
+
+            lines.push(line);
+            routeLayers.push({ line, index: i });
         });
-
-        // Recommended route → fit map
-        if (i === recommendedIndex) {
-            const coords = info.coords.map(c => [c[1], c[0]]);
-            map.fitBounds(coords);
-        }
     });
-}
 
+    // Fit map to first route
+    if (routesInfo.length) map.fitBounds(
+        routesInfo[0].coords.map(c => [c[1], c[0]])
+    );
+}
 
 
 
 
 
 function highlightRoute(index) {
-    // Highlight recommended route segments, dim others
-    let routeCounter = 0;
-
-    routesInfo.forEach((info, i) => {
-        const polylines = drawSegmentedRoute(info.coords);
-        polylines.forEach(line => {
-            const isActive = i === index;
-            line.setStyle({
-                color: isActive ? "#ef4444" : "#888888",
-                weight: isActive ? 7 : 4,
-                opacity: isActive ? 1 : 0.5
-            });
+    routeLayers.forEach(obj => {
+        const isActive = (obj.index === index);
+        obj.layer.setStyle({
+            color: isActive ? "#ef4444" : "#888888",   // active red, others grey
+            weight: isActive ? 7 : 4,
+            opacity: isActive ? 1 : 0.5
         });
-        routeCounter++;
     });
 }
+
+
 
 
 
@@ -780,35 +828,36 @@ function getRiskAtPoint(lat, lng) {
     const riskObj = computeRiskForRoute([[lng, lat]]); // pass as [[lng, lat]]
     return riskObj.combined; // number between 0 and 1
 }
-function drawSegmentedRoute(coords) {
+function drawSegmentedRoute(coords, routeIndex) {
     const latlngs = coords.map(c => ({ lat: c[1], lng: c[0] }));
     const segments = splitRoute(latlngs);
     const lines = [];
 
-    segments.forEach(seg => {
-        const mid = {
-            lat: (seg[0].lat + seg[1].lat) / 2,
-            lng: (seg[0].lng + seg[1].lng) / 2
-        };
+    segments.forEach((seg, i) => {
+        const mid = { lat: (seg[0].lat + seg[1].lat)/2, lng: (seg[0].lng + seg[1].lng)/2 };
         const risk = getRiskAtPoint(mid.lat, mid.lng);
 
         const line = L.polyline(
-            [
-                [seg[0].lat, seg[0].lng],
-                [seg[1].lat, seg[1].lng]
-            ],
-            {
-                color: getColor(risk),
-                weight: 6,
-                opacity: 0.8
-            }
+            [[seg[0].lat, seg[0].lng], [seg[1].lat, seg[1].lng]],
+            { color: getColor(risk), weight: 6, opacity: 0.8 }
         ).addTo(map);
+
+        // Only label the first segment with the route number
+        if (i === 0) {
+            line.bindTooltip(`Route ${routeIndex + 1}`, {
+                className: "route-tooltip",
+                permanent: true,
+                direction: "center",
+                offset: [0, -10]
+            });
+        }
 
         lines.push(line);
     });
 
-    return lines; // Return array of polylines
+    return lines;
 }
+
 
 
 
