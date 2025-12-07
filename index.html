@@ -408,9 +408,6 @@ const url = `https://router.project-osrm.org/route/v1/driving/${s.lng},${s.lat};
 
 
 
-
-
-
 //Basic Geocoder (Turn any text → Coordinates)
 async function geocode(place) {
     const url = `https://nominatim.openstreetmap.org/search?format=json&q=${place}`;
@@ -478,6 +475,41 @@ function computeRiskForRoute(routeCoords) {
     };
 }
 
+
+function generateRouteReason(routeInfo, otherRoutes) {
+    // routeInfo: the recommended route
+    // otherRoutes: array of other routeInfos to compare
+
+    if (!otherRoutes || otherRoutes.length === 0) return "Lowest overall risk compared to alternatives.";
+
+    const other = otherRoutes[0]; // compare with first alternative
+    const reasons = [];
+
+    if (routeInfo.risk.accAvg < other.risk.accAvg) {
+        reasons.push("🚧 Avoids high-accident zones");
+    }
+    if (routeInfo.risk.crimeAvg < other.risk.crimeAvg) {
+        reasons.push("🛑 Passes through safer roads with lower crime");
+    }
+    if (routeInfo.risk.pollAvg < other.risk.pollAvg) {
+        reasons.push("🏭 Lower pollution along the route");
+    }
+    if (routeInfo.risk.trafficAvg < other.risk.trafficAvg) {
+        reasons.push("🚦 Less congested traffic");
+    }
+    if (routeInfo.risk.hospAvg < other.risk.hospAvg) {
+        reasons.push("🏥 Fewer hospital load areas (less emergency traffic)");
+    }
+    if (routeInfo.risk.wifiAvg > other.risk.wifiAvg) {
+        reasons.push("📶 Better connectivity/WiFi coverage");
+    }
+
+    if (reasons.length === 0) return "Overall, this route is slightly safer or similar to other options.";
+
+    return reasons.join(", ") + ".";
+}
+
+
 // global holders
 let routeLayers = []; // L.geoJSON layers for routes
 let routesInfo = [];  // metadata for sidebar
@@ -523,6 +555,15 @@ const recommendedIndex = recommendedRoute.index;
 
     renderRoutes(routesInfo, recommendedIndex);
     updateSidebarRoutes(routesInfo, recommendedIndex);
+
+// After computing and sorting routes
+const recommended = routesInfo[0]; 
+const others = routesInfo.slice(1);
+
+const reasonText = generateRouteReason(recommended, others);
+
+document.getElementById("risk-advice").innerHTML = `<b>Why Recommended:</b> ${reasonText}`;
+
 }
 
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------
