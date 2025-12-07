@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
 
     <style>
         #map {
@@ -66,6 +68,8 @@
 </head>
 <body>
 
+
+
 <div id="map"></div>
 
 <div id="sidebar">
@@ -81,6 +85,10 @@
     <p id="risk-score">Click anywhere on map</p>
     <div id="risk-details"></div>
     <div id="risk-advice"></div>
+
+    <h3>📍 Turn-by-Turn</h3>
+    <ol id="turn-list"></ol>
+
 </div>
 
 <!--routing-->
@@ -89,6 +97,9 @@
     <input id="end" placeholder="End location" />
     <button onclick="getRouteMultiple()">Find Route</button>
 </div>
+
+
+
 
 <script>
 
@@ -116,6 +127,18 @@ const heatStyle = {
 };
 
 const map = L.map("map");
+
+// ⭐ GLOBAL: Risk Advice Function (must be placed BEFORE usage)
+function getAdvice(score) {
+    if (score > 0.75) {
+        return "<p style='color:red'><b>⚠ High Risk:</b> Avoid this route if possible.</p>";
+    }
+    if (score > 0.50) {
+        return "<p style='color:orange'><b>⚠ Medium Risk:</b> Conditions may be unsafe.</p>";
+    }
+    return "<p style='color:green'><b>✓ Low Risk:</b> Good and safe route.</p>";
+}
+
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19
@@ -270,17 +293,6 @@ document.getElementById("risk-advice").innerHTML = getAdvice(combined);
 });
 
 
-function getAdvice(score) {
-    if (score > 0.75) {
-        return "<p style='color:red'><b>⚠ High Risk Area:</b> Avoid if possible. Drive carefully.</p>";
-    }
-    if (score > 0.50) {
-        return "<p style='color:orange'><b>Moderate Risk:</b> Stay alert, some issues detected.</p>";
-    }
-    return "<p style='color:green'><b>Low Risk:</b> Safe zone, normal conditions.</p>";
-}
-document.getElementById("closeSidebar").onclick = () =>
-    document.getElementById("sidebar").classList.remove("open");
 
 
 
@@ -417,7 +429,7 @@ async function getRouteMultiple() {
     if (!s || !e) return alert("Location not found");
 
     // alternatives=true requests multiple routes from OSRM
-    const url = `https://router.project-osrm.org/route/v1/driving/${s.lng},${s.lat};${e.lng},${e.lat}?overview=full&geometries=geojson&alternatives=true`;
+const url = `https://router.project-osrm.org/route/v1/driving/${s.lng},${s.lat};${e.lng},${e.lat}?overview=full&geometries=geojson&alternatives=true&steps=true`;
 
     const res = await fetch(url);
     const data = await res.json();
@@ -429,6 +441,10 @@ async function getRouteMultiple() {
 
     processRoutes(data.routes);
 }
+
+
+
+
 
 
 //Basic Geocoder (Turn any text → Coordinates)
@@ -504,79 +520,290 @@ let routesInfo = [];  // metadata for sidebar
 
 async function processRoutes(osrmRoutes) {
     // clear previous
-    routeLayers.forEach(l => map.removeLayer(l));
+    routeLayers.forEach(l => map.removeLayer(l.layer || l));
     routeLayers = [];
     routesInfo = [];
 
     // For each returned route compute metrics
-    for (let i = 0; i < osrmRoutes.length; i++) {
-        const r = osrmRoutes[i];
-
-        // OSRM geometry: GeoJSON LineString coordinates array [lng,lat]
+    osrmRoutes.forEach((r, i) => {
         const coords = r.geometry.coordinates;
         const risk = computeRiskForRoute(coords);
+        const steps = r.legs[0]?.steps?.map(s => {
+    if (s.maneuver?.instruction) return s.maneuver.instruction;
+    // fallback: construct instruction from type + modifier + name
+    let instr = '';
+    if (s.maneuver?.type) instr += s.maneuver.type;
+    if (s.maneuver?.modifier) instr += ' ' + s.maneuver.modifier;
+    if (s.name) instr += ' onto ' + s.name;
+    return instr || 'Continue';
+}) || [];
 
-        // convert duration, distance
-        const durationMin = Math.round(r.duration / 60);
-        const distanceKm = (r.distance / 1000).toFixed(2);
 
         const info = {
             index: i,
             coords,
-            durationMin,
-            distanceKm,
-            risk
+            durationMin: Math.round(r.duration / 60),
+            distanceKm: (r.distance / 1000).toFixed(2),
+            risk,
+            steps
         };
+
         routesInfo.push(info);
-    }
+    });
 
     // pick recommended: smallest combined risk
     routesInfo.sort((a,b) => a.risk.combined - b.risk.combined);
     const recommendedIndex = routesInfo[0].index;
 
-    // render on map and sidebar
     renderRoutes(routesInfo, recommendedIndex);
     updateSidebarRoutes(routesInfo, recommendedIndex);
 }
 
-function renderRoutes(routesInfo, recommendedIndex) {
-    // remove existing
-    routeLayers.forEach(l => map.removeLayer(l));
-    routeLayers = [];
+//-----------------------------------------------------------------------------------------------------------------------------------------------------------
+//--------------------------------------------------------- route instructions
+
+function getDirectionIcon(text) {
+    text = text.toLowerCase();
+
+    if (text.includes("left")) return "⬅";
+    if (text.includes("right")) return "➡";
+    if (text.includes("straight")) return "⬆";
+    if (text.includes("slight left")) return "↖";
+    if (text.includes("slight right")) return "↗";
+    if (text.includes("ramp")) return "🛣";
+    if (text.includes("merge")) return "🔀";
+    if (text.includes("roundabout")) return "⭕";
+
+    return "📍";
+}
+
+// ---------- helper: pretty distance ----------
+function formatDistance(meters) {
+    if (!meters && meters !== 0) return "";
+    if (meters >= 1000) return (meters / 1000).toFixed(1) + " km";
+    return Math.round(meters) + " m";
+}
+
+// ---------- helper: icon from text ----------
+function getDirectionIconFromParts(type, modifier, name) {
+    const txt = `${type || ""} ${modifier || ""} ${name || ""}`.toLowerCase();
+    if (txt.includes("left")) return "⬅";
+    if (txt.includes("right")) return "➡";
+    if (txt.includes("straight")) return "⬆";
+    if (txt.includes("slight left")) return "↖";
+    if (txt.includes("slight right")) return "↗";
+    if (txt.includes("roundabout")) return "⭕";
+    if (txt.includes("merge")) return "🔀";
+    if (txt.includes("ramp")) return "🛣";
+    return "📍";
+}
+
+// ---------- build a clean instruction text ----------
+function buildInstructionText(step) {
+    const m = step.maneuver || {};
+    const type = m.type || "";
+    const modifier = m.modifier || "";
+    const rawInstr = m.instruction || step.instruction || "";
+    const road = step.name || "";
+    const dist = formatDistance(step.distance);
+
+    if (rawInstr && rawInstr.length > 3) {
+        const cleaned = rawInstr.replace(/\s+/g, " ").trim();
+        return `${cleaned}${dist ? " — " + dist : ""}`;
+    }
+
+    let parts = [];
+    if (modifier) parts.push(modifier);
+    if (type && type !== modifier) parts.unshift(type);
+
+    let phrase = parts.length ? parts.join(" ") : "Continue";
+    if (road) phrase += ` onto ${road}`;
+    if (dist) phrase += ` — ${dist}`;
+
+    return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+}
+
+// ---------- show turn-by-turn in sidebar ----------
+function showTurnByTurn(routeInfo) {
+    const container = document.getElementById("turn-list");
+    container.innerHTML = "";
+
+    let steps = [];
+
+    // Accept various shapes of stored step data
+    if (Array.isArray(routeInfo.steps) && typeof routeInfo.steps[0] === "string") {
+        steps = routeInfo.steps.map(s => ({ _rawText: s }));
+    } else if (routeInfo.legs?.[0]?.steps) {
+        steps = routeInfo.legs[0].steps;
+    } else if (routeInfo.steps) {
+        steps = routeInfo.steps;
+    }
+
+    if (!steps || steps.length === 0) {
+        const li = document.createElement("li");
+        li.innerText = "No instructions available.";
+        container.appendChild(li);
+        return;
+    }
+
+    steps.forEach((stepObj) => {
+        let text, icon;
+
+        if (stepObj._rawText) {
+            text = stepObj._rawText;
+            icon = getDirectionIconFromParts("", "", text);
+        } else {
+            text = buildInstructionText(stepObj);
+            icon = getDirectionIconFromParts(
+                stepObj.maneuver?.type,
+                stepObj.maneuver?.modifier,
+                stepObj.name
+            );
+        }
+
+        const li = document.createElement("li");
+        li.style.padding = "6px 0";
+        li.innerHTML = `<span style="font-size:20px; margin-right:8px;">${icon}</span> ${text}`;
+        container.appendChild(li);
+    });
+
+    document.getElementById("sidebar").classList.add("open");
+}
+
+// ---------- update route list in sidebar ----------
+function updateSidebarRoutes(routesInfo, recommendedIndex) {
+    let html = `<h3>Route options</h3><div class="routes-list">`;
 
     routesInfo.forEach(info => {
-        const geo = {
-            "type": "Feature",
-            "geometry": {
-                "type": "LineString",
-                "coordinates": info.coords
-            }
-        };
+        const r = info.risk;
+        let riskLabel = (r.combined < 0.4) ? "Low" :
+                        (r.combined < 0.7) ? "Medium" : "High";
+        let color = (riskLabel === "Low") ? "green" :
+                    (riskLabel === "Medium") ? "orange" : "red";
 
-        const color = (info.index === recommendedIndex) ? "#22c55e" : "#888888";
-        const weight = (info.index === recommendedIndex) ? 6 : 4;
-        const opacity = (info.index === recommendedIndex) ? 1 : 0.6;
+        const recommended = (info.index === recommendedIndex)
+            ? " <strong>⭐ Recommended</strong>"
+            : "";
 
-        const layer = L.geoJSON(geo, {
-            style: { color, weight, opacity }
-        }).addTo(map);
+        html += `
+            <div class="route-item" data-idx="${info.index}" 
+                 style="margin-bottom:8px; padding:8px; border-radius:6px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.06);">
 
-        // store reference
-        routeLayers.push({ layer, index: info.index });
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <b>Route ${info.index + 1}</b>${recommended}
+                        <div style="font-size:12px; color:#666;">
+                            ${info.durationMin} min • ${info.distanceKm} km
+                        </div>
+                    </div>
 
-        // click to show details & highlight
-        layer.on('click', () => {
-            highlightRoute(info.index);
-            showRouteDetailsInSidebar(info);
+                    <div style="text-align:right;">
+                        <div style="color:${color}; font-weight:600;">
+                            ${r.combined.toFixed(2)} (${riskLabel})
+                        </div>
+                        <button class="show-turns-btn" data-idx="${info.index}"
+                                style="margin-top:6px; padding:4px 8px; cursor:pointer;">
+                            Show turns
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    html += `</div><hr>`;
+    document.getElementById("risk-details").innerHTML = html;
+
+    document.querySelectorAll(".route-item").forEach(el => {
+        el.addEventListener("click", () => {
+            const idx = Number(el.dataset.idx);
+            const selected = routesInfo.find(r => r.index === idx);
+            highlightRoute(idx);
+            showRouteDetailsInSidebar(selected);
         });
     });
 
-    // fit map to first route bounds for user clarity
-    if (routesInfo.length) {
-        const firstLayer = routeLayers[0].layer;
-        map.fitBounds(firstLayer.getBounds(), { padding: [40, 40] });
+    document.querySelectorAll(".show-turns-btn").forEach(btn => {
+        btn.addEventListener("click", ev => {
+            ev.stopPropagation();
+            const idx = Number(btn.dataset.idx);
+            const selected = routesInfo.find(r => r.index === idx);
+            showTurnByTurn(selected);
+        });
+    });
+
+    document.getElementById("sidebar").classList.add("open");
+}
+
+
+//-----------------------------------------------------------------------------------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------------------------------------------------------------------------------------   
+
+
+function renderRoutes(routesInfo, recommendedIndex) {
+    // Remove old routes
+    routeLayers.forEach(l => map.removeLayer(l));
+    routeLayers = [];
+
+    routesInfo.forEach((info, i) => {
+        const coords = info.coords.map(c => [c[1], c[0]]); // convert [lng,lat] → [lat,lng]
+
+        // COLOR BASED ON RISK
+        const r = info.risk.combined;
+        let color = "green";
+        if (r >= 0.4 && r < 0.7) color = "orange";
+        if (r >= 0.7) color = "red";
+
+        // Recommended route → thicker line
+        const weight = (i === recommendedIndex) ? 7 : 4;
+
+        const routeLine = L.polyline(coords, {
+            color,
+            weight,
+            opacity: 0.9
+        }).addTo(map);
+
+        // Store so we can remove later
+        routeLayers.push(routeLine);
+
+        // Click on route → show turn-by-turn for this route
+        routeLine.on("click", () => {
+            showTurnByTurn(info);
+        });
+    });
+
+    // Zoom to the recommended route
+    const best = routesInfo.find(r => r.index === recommendedIndex);
+    if (best) {
+        const coords = best.coords.map(c => [c[1], c[0]]);
+        map.fitBounds(coords);
     }
 }
+
+
+function drawDangerColoredRoute(coords) {
+    // Remove old layers
+    if (window.dangerLayers) {
+        window.dangerLayers.forEach(l => map.removeLayer(l));
+    }
+    window.dangerLayers = [];
+
+    const segments = splitIntoSegments(coords);
+
+    segments.forEach(seg => {
+        const risk = computeRiskForSegment(seg[0], seg[1]);
+        const color = riskToColor(risk);
+
+        const layer = L.polyline(seg, {
+            color: color,
+            weight: 6,
+            opacity: 0.9
+        }).addTo(map);
+
+        window.dangerLayers.push(layer);
+    });
+}
+
 
 function highlightRoute(index) {
     routeLayers.forEach(obj => {
@@ -620,6 +847,7 @@ function updateSidebarRoutes(routesInfo, recommendedIndex) {
     });
 
     // open sidebar
+    
     document.getElementById("sidebar").classList.add("open");
 }
 
@@ -658,6 +886,65 @@ function sampleRouteCoords(coords, step = 10) {
     }
     return points;
 }
+
+//-----------------------------------------------------------------------------------------------------------------------------------------------------------
+//--------------------------------------------------------- route colors
+
+
+
+
+function splitIntoSegments(coords, segmentDistance = 100) {
+    const segments = [];
+    let start = coords[0];
+
+    for (let i = 1; i < coords.length; i++) {
+        const end = coords[i];
+        segments.push([start, end]);
+        start = end;
+    }
+
+    return segments;
+}
+
+function computeRiskForSegment(pointA, pointB) {
+    // Much more variation
+    return Math.random(); 
+}
+
+function riskToColor(risk) {
+    if (risk < 0.25) return "green";      // very safe
+    if (risk < 0.55) return "yellow";     // medium
+    return "red";                         // danger
+}
+
+function drawDangerColoredRoute(coords) {
+    // Remove old layers
+    if (window.dangerLayers) {
+        window.dangerLayers.forEach(l => map.removeLayer(l));
+    }
+    window.dangerLayers = [];
+
+    const segments = splitIntoSegments(coords);
+
+    segments.forEach(seg => {
+        const risk = computeRiskForSegment(seg[0], seg[1]);
+        const color = riskToColor(risk);
+
+        const layer = L.polyline(seg, {
+            color: color,
+            weight: 6,
+            opacity: 0.9
+        }).addTo(map);
+
+        window.dangerLayers.push(layer);
+    });
+}
+
+
+//-----------------------------------------------------------------------------------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
 
 
 
