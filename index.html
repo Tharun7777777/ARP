@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
-    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
 
 
     <style>
@@ -64,6 +63,14 @@
     padding: 6px;
 }
 
+.close-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    
+}
+
     </style>
 </head>
 <body>
@@ -72,24 +79,20 @@
 
 <div id="map"></div>
 
-<div id="sidebar">
-    <button id="closeSidebar" style="
-    float:right;
-    font-size:18px;
-    border:none;
-    background:none;
-    cursor:pointer;
-">✕</button>
+<div id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+        
+        <button id="closeSidebar" class="close-btn">✕</button>
+    </div>
 
-    <h2>📊 Risk Insights</h2>
-    <p id="risk-score">Click anywhere on map</p>
-    <div id="risk-details"></div>
-    <div id="risk-advice"></div>
-
-    <h3>📍 Turn-by-Turn</h3>
-    <ol id="turn-list"></ol>
-
+    <div id="route-content">
+        <div id="risk-score"></div>
+        <div id="risk-details"></div>
+        <div id="risk-advice"></div>
+        <ol id="turn-list"></ol>
+    </div>
 </div>
+
 
 <!--routing-->
 <div id="route-box">
@@ -102,6 +105,18 @@
 
 
 <script>
+
+document.addEventListener("DOMContentLoaded", () => {
+    const closeBtn = document.getElementById("closeSidebar");
+    const sidebar = document.getElementById("sidebar");
+
+    if (closeBtn && sidebar) {
+        closeBtn.onclick = () => {
+            sidebar.classList.remove("open");
+        };
+    }
+});
+
 
 let acc = [];
 let crime = [];
@@ -270,25 +285,8 @@ map.on("click", (e) => {
         .setContent(popupHTML)
         .openOn(map);
 
-    // Open the sidebar
-document.getElementById("sidebar").classList.add("open");
 
-// Update score
-document.getElementById("risk-score").innerHTML =
-    `🔥 Combined Risk: <b>${combined.toFixed(2)}</b>`;
 
-// Update breakdown
-document.getElementById("risk-details").innerHTML = `
-    <p><b>Accidents:</b> ${a.toFixed(2)}</p>
-    <p><b>Crime:</b> ${c.toFixed(2)}</p>
-    <p><b>Traffic:</b> ${t.toFixed(2)}</p>
-    <p><b>Pollution:</b> ${p.toFixed(2)}</p>
-    <p><b>Hospital Load:</b> ${h.toFixed(2)}</p>
-    <p><b>Wi-Fi Quality:</b> ${w.toFixed(2)}</p>
-`;
-
-// Recommendations
-document.getElementById("risk-advice").innerHTML = getAdvice(combined);
 
 });
 
@@ -337,69 +335,6 @@ map.on("locationerror", () => {
 let combinedPoints = []; // make it global
 
 
-// 🟢 Get nearest combined risk for a given point
-function getNearestRisk(lat, lng) {
-    let minDist = Infinity;
-    let nearestRisk = 0;
-
-    combinedPoints.forEach(p => {
-        const dLat = lat - p[0];
-        const dLng = lng - p[1];
-        const dist = Math.sqrt(dLat * dLat + dLng * dLng);
-
-        if (dist < minDist) {
-            minDist = dist;
-            nearestRisk = p[2]; // combined risk value
-        }
-    });
-
-    return nearestRisk;
-}
-//Calculate Route Risk
-function analyzeRouteRisk(points) {
-    let totalRisk = 0;
-    let closestPoints = []; 
-
-    points.forEach(p => {
-        const lat = p[1];
-        const lng = p[0];
-        const risk = getNearestRisk(lat, lng);
-
-        closestPoints.push(risk);
-        totalRisk += risk;
-    });
-
-    const avgRisk = totalRisk / points.length;
-
-    // 🔥 Open the sidebar automatically
-    document.getElementById("sidebar").classList.add("open");
-
-    // Risk components (estimated for route)
-    const a = avgRisk * 0.30;
-    const c = avgRisk * 0.20;
-    const t = avgRisk * 0.20;
-    const p = avgRisk * 0.15;
-    const h = avgRisk * 0.10;
-    const w = avgRisk * 0.05;
-
-    // Update score
-    document.getElementById("risk-score").innerHTML =
-        `🚗 Route Risk Score: <b>${avgRisk.toFixed(2)}</b>`;
-
-    // Update breakdown
-    document.getElementById("risk-details").innerHTML = `
-        <p><b>Accidents:</b> ${a.toFixed(2)}</p>
-        <p><b>Crime:</b> ${c.toFixed(2)}</p>
-        <p><b>Traffic:</b> ${t.toFixed(2)}</p>
-        <p><b>Pollution:</b> ${p.toFixed(2)}</p>
-        <p><b>Hospital Load:</b> ${h.toFixed(2)}</p>
-        <p><b>Wi-Fi Quality:</b> ${w.toFixed(2)}</p>
-    `;
-
-    // Advice
-    document.getElementById("risk-advice").innerHTML = getAdvice(avgRisk);
-}
-
 
 function getDistance(lat1, lon1, lat2, lon2) {
     const R = 6371;
@@ -415,6 +350,13 @@ function getDistance(lat1, lon1, lat2, lon2) {
     return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
+function sampleRouteCoords(coords, step = 10) {
+    const result = [];
+    for (let i = 0; i < coords.length; i += step) {
+        result.push({ lng: coords[i][0], lat: coords[i][1] });
+    }
+    return result;
+}
 
 
 //Fetch Route Using OSRM API
@@ -562,27 +504,10 @@ async function processRoutes(osrmRoutes) {
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------
 //--------------------------------------------------------- route instructions
 
-function getDirectionIcon(text) {
-    text = text.toLowerCase();
 
-    if (text.includes("left")) return "⬅";
-    if (text.includes("right")) return "➡";
-    if (text.includes("straight")) return "⬆";
-    if (text.includes("slight left")) return "↖";
-    if (text.includes("slight right")) return "↗";
-    if (text.includes("ramp")) return "🛣";
-    if (text.includes("merge")) return "🔀";
-    if (text.includes("roundabout")) return "⭕";
 
-    return "📍";
-}
 
-// ---------- helper: pretty distance ----------
-function formatDistance(meters) {
-    if (!meters && meters !== 0) return "";
-    if (meters >= 1000) return (meters / 1000).toFixed(1) + " km";
-    return Math.round(meters) + " m";
-}
+
 
 // ---------- helper: icon from text ----------
 function getDirectionIconFromParts(type, modifier, name) {
@@ -746,131 +671,50 @@ function renderRoutes(routesInfo, recommendedIndex) {
     routeLayers = [];
 
     routesInfo.forEach((info, i) => {
-        const coords = info.coords.map(c => [c[1], c[0]]); // convert [lng,lat] → [lat,lng]
+        // Draw route segments with color
+        const polylines = drawSegmentedRoute(info.coords);
 
-        // COLOR BASED ON RISK
-        const r = info.risk.combined;
-        let color = "green";
-        if (r >= 0.4 && r < 0.7) color = "orange";
-        if (r >= 0.7) color = "red";
+        // Store layers
+        routeLayers.push(...polylines); // drawSegmentedRoute will return array of L.Polyline
 
-        // Recommended route → thicker line
-        const weight = (i === recommendedIndex) ? 7 : 4;
-
-        const routeLine = L.polyline(coords, {
-            color,
-            weight,
-            opacity: 0.9
-        }).addTo(map);
-
-        // Store so we can remove later
-        routeLayers.push(routeLine);
-
-        // Click on route → show turn-by-turn for this route
-        routeLine.on("click", () => {
-            showTurnByTurn(info);
+        // Attach click to each segment
+        polylines.forEach(line => {
+            line.on("click", () => showTurnByTurn(info));
         });
-    });
 
-    // Zoom to the recommended route
-    const best = routesInfo.find(r => r.index === recommendedIndex);
-    if (best) {
-        const coords = best.coords.map(c => [c[1], c[0]]);
-        map.fitBounds(coords);
-    }
-}
-
-
-function drawDangerColoredRoute(coords) {
-    // Remove old layers
-    if (window.dangerLayers) {
-        window.dangerLayers.forEach(l => map.removeLayer(l));
-    }
-    window.dangerLayers = [];
-
-    const segments = splitIntoSegments(coords);
-
-    segments.forEach(seg => {
-        const risk = computeRiskForSegment(seg[0], seg[1]);
-        const color = riskToColor(risk);
-
-        const layer = L.polyline(seg, {
-            color: color,
-            weight: 6,
-            opacity: 0.9
-        }).addTo(map);
-
-        window.dangerLayers.push(layer);
+        // Recommended route → fit map
+        if (i === recommendedIndex) {
+            const coords = info.coords.map(c => [c[1], c[0]]);
+            map.fitBounds(coords);
+        }
     });
 }
+
+
+
+
 
 
 function highlightRoute(index) {
-    routeLayers.forEach(obj => {
-        const isActive = (obj.index === index);
-        obj.layer.setStyle({
-            color: isActive ? "#ef4444" : "#888888",   // active red, others grey
-            weight: isActive ? 7 : 4,
-            opacity: isActive ? 1 : 0.5
+    // Highlight recommended route segments, dim others
+    let routeCounter = 0;
+
+    routesInfo.forEach((info, i) => {
+        const polylines = drawSegmentedRoute(info.coords);
+        polylines.forEach(line => {
+            const isActive = i === index;
+            line.setStyle({
+                color: isActive ? "#ef4444" : "#888888",
+                weight: isActive ? 7 : 4,
+                opacity: isActive ? 1 : 0.5
+            });
         });
+        routeCounter++;
     });
 }
 
-function updateSidebarRoutes(routesInfo, recommendedIndex) {
-    // Build HTML
-    let html = `<h3>Route options</h3><div class="routes-list">`;
-    routesInfo.forEach(info => {
-        const r = info.risk;
-        let riskLabel = (r.combined < 0.4) ? "Low" : (r.combined < 0.7) ? "Medium" : "High";
-        let color = (riskLabel === "Low") ? "green" : (riskLabel === "Medium") ? "orange" : "red";
-        const recommended = (info.index === recommendedIndex) ? " <strong>⭐ Recommended</strong>" : "";
-
-        html += `
-            <div class="route-item" data-idx="${info.index}" style="margin-bottom:8px; padding:8px; border-radius:6px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.06);">
-                <div><b>Route ${info.index + 1}</b>${recommended}</div>
-                <div>${info.durationMin} min • ${info.distanceKm} km</div>
-                <div>Risk: <span style="color:${color}">${r.combined.toFixed(2)} (${riskLabel})</span></div>
-            </div>
-        `;
-    });
-    html += `</div><hr>`;
-    document.getElementById("risk-details").innerHTML = html;
-
-    // attach click listeners
-    document.querySelectorAll(".route-item").forEach(el => {
-        el.addEventListener("click", () => {
-            const idx = Number(el.dataset.idx);
-            const selected = routesInfo.find(r => r.index === idx);
-            highlightRoute(idx);
-            showRouteDetailsInSidebar(selected);
-        });
-    });
-
-    // open sidebar
-    
-    document.getElementById("sidebar").classList.add("open");
-}
 
 
-function showRouteDetailsInSidebar(info) {
-    const r = info.risk;
-    // show main score at top
-    document.getElementById("risk-score").innerHTML = `🔥 Route ${info.index + 1} Combined Risk: <b>${r.combined.toFixed(2)}</b>`;
-
-    // show breakdown & advice below (append)
-    const breakdownHtml = `
-        <p><b>Accidents:</b> ${r.accAvg.toFixed(2)}</p>
-        <p><b>Crime:</b> ${r.crimeAvg.toFixed(2)}</p>
-        <p><b>Traffic:</b> ${r.trafficAvg.toFixed(2)}</p>
-        <p><b>Pollution:</b> ${r.pollAvg.toFixed(2)}</p>
-        <p><b>Hospital:</b> ${r.hospAvg.toFixed(2)}</p>
-        <p><b>WiFi:</b> ${r.wifiAvg.toFixed(2)}</p>
-    `;
-    document.getElementById("risk-details").innerHTML = breakdownHtml;
-
-    document.getElementById("risk-advice").innerHTML = getAdvice(r.combined);
-    document.getElementById("sidebar").classList.add("open");
-}
 
 
 // simple sampler: pick one every N points to control workload
@@ -889,56 +733,84 @@ function sampleRouteCoords(coords, step = 10) {
 
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------
 //--------------------------------------------------------- route colors
-
-
-
-
-function splitIntoSegments(coords, segmentDistance = 100) {
-    const segments = [];
-    let start = coords[0];
-
-    for (let i = 1; i < coords.length; i++) {
-        const end = coords[i];
+function splitRoute(latlngs) {
+    let segments = [];
+    for (let i = 0; i < latlngs.length - 1; i++) {
+        let start = latlngs[i];
+        let end = latlngs[i+1];
         segments.push([start, end]);
-        start = end;
     }
-
     return segments;
 }
 
-function computeRiskForSegment(pointA, pointB) {
-    // Much more variation
-    return Math.random(); 
+function riskForSegment(segment) {
+    const mid = {
+        lat: (segment[0].lat + segment[1].lat) / 2,
+        lng: (segment[0].lng + segment[1].lng) / 2
+    };
+    return getRiskValueFromData(mid.lat, mid.lng);
 }
 
-function riskToColor(risk) {
-    if (risk < 0.25) return "green";      // very safe
-    if (risk < 0.55) return "yellow";     // medium
-    return "red";                         // danger
+function getColor(risk) {
+    if (risk < 0.2) return "green";
+    if (risk < 0.4) return "yellow";
+    if (risk < 0.6) return "orange";
+    if (risk < 0.8) return "red";
+    return "darkred";
 }
+// 1. Convert OSRM coords → Leaflet coords
+//const coords = data.routes[0].geometry.coordinates.map(c => ({
+///    lat: c[1],
+//    lng: c[0]
+//}));
 
-function drawDangerColoredRoute(coords) {
-    // Remove old layers
-    if (window.dangerLayers) {
-        window.dangerLayers.forEach(l => map.removeLayer(l));
-    }
-    window.dangerLayers = [];
+// 2. Split into segments
+//const segments = splitRoute(coords);
 
-    const segments = splitIntoSegments(coords);
+// 3. Draw colored route pieces
+//segments.forEach(seg => {
+//    let risk = riskForSegment(seg);
+//    L.polyline(seg, {
+ //       color: getColor(risk),
+//       weight: 6
+//    }).addTo(map);
+//});
+
+function getRiskAtPoint(lat, lng) {
+    const riskObj = computeRiskForRoute([[lng, lat]]); // pass as [[lng, lat]]
+    return riskObj.combined; // number between 0 and 1
+}
+function drawSegmentedRoute(coords) {
+    const latlngs = coords.map(c => ({ lat: c[1], lng: c[0] }));
+    const segments = splitRoute(latlngs);
+    const lines = [];
 
     segments.forEach(seg => {
-        const risk = computeRiskForSegment(seg[0], seg[1]);
-        const color = riskToColor(risk);
+        const mid = {
+            lat: (seg[0].lat + seg[1].lat) / 2,
+            lng: (seg[0].lng + seg[1].lng) / 2
+        };
+        const risk = getRiskAtPoint(mid.lat, mid.lng);
 
-        const layer = L.polyline(seg, {
-            color: color,
-            weight: 6,
-            opacity: 0.9
-        }).addTo(map);
+        const line = L.polyline(
+            [
+                [seg[0].lat, seg[0].lng],
+                [seg[1].lat, seg[1].lng]
+            ],
+            {
+                color: getColor(risk),
+                weight: 6,
+                opacity: 0.8
+            }
+        ).addTo(map);
 
-        window.dangerLayers.push(layer);
+        lines.push(line);
     });
+
+    return lines; // Return array of polylines
 }
+
+
 
 
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------
