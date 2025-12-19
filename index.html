@@ -128,6 +128,10 @@
 
 <script>
 
+
+
+
+
 document.addEventListener("DOMContentLoaded", () => {
     const closeBtn = document.getElementById("closeSidebar");
     const sidebar = document.getElementById("sidebar");
@@ -242,6 +246,8 @@ Promise.all([
     const hospitalHover = L.layerGroup().addTo(map);
     const combinedHover = L.layerGroup().addTo(map);
 
+    
+
     // Helper for hover markers
     function addHoverMarkers(dataset, layer, label) {
         dataset.forEach(p => {
@@ -325,7 +331,7 @@ map.on("click", (e) => {
         "Traffic": trafficLayer,
         "WiFi Strength": wifiLayer,
         "Hospital Load": hospitalLayer,
-        "🔥 Combined Risk": combinedLayer,
+        "Combined Risk": combinedLayer,
 
         // Hover layers
         "ℹ️ Accidents Info": accidentHover,
@@ -339,6 +345,8 @@ map.on("click", (e) => {
     L.control.layers(null, overlays).addTo(map);
 
 });
+
+
 
 
 // USER LOCATION
